@@ -1,9 +1,6 @@
-# PD - Best debug
+# PD - Best debug; Fork of PEDA
 # TODO: syscalls
 import inspect
-
-import sys
-print(sys.version)
 
 __gdbModule = None
 __lldbModule = None
@@ -60,6 +57,7 @@ class GDBDBG(Debugger):
         pass
 
     def add_aliases(self):
+
         pass
 
     def _executeCommand(self, str):
@@ -100,6 +98,9 @@ class LLDBDBG(Debugger):
     
     def start(self, cmd, result, m, b, c):
         self._executeCommand('process launch --stop-at-entry')
+    
+    def vmmap(self, cmd, result, m, b, c):
+        pass
 
     def add_aliases(self):
         self._executeCommand('command script add --function pd.dbg.context context')
@@ -107,6 +108,14 @@ class LLDBDBG(Debugger):
         self._executeCommand('command script add --function pd.dbg.context ct')
 
         self._executeCommand('command script add --function pd.dbg.start start')
+
+        self._executeCommand('command script add --function pd.dbg.vmmap vmmap')
+        self._executeCommand('command script add --function pd.dbg.vmmap vmm')
+        # tele, searchmem, tls, deactive, checksec, aslr, print disassembly, stepuntil
+        # xrefs, heap stuff
+        # libc, heap, ld (print base)
+        # heapinfo, magic, one_gadget, canary
+        # findmainarea
 
     def _executeCommandWithRet(self, inp):
         ret = lldb.SBCommandRetwddurnObject()
