@@ -24,16 +24,34 @@ def _throw_unimpl():
 
 _START_COLOR = '\x1b['
 _RESET_ATTRS = '\x1b[0m'
+
 def red(x):
     return _START_COLOR + '31m' + x + _RESET_ATTRS
+
+current_arch = None
+pointer_size = 0
+arch_gpregs = []
 
 class Debugger:
     def set_prompt(self, astr):
         _throw_unimpl()
+    
+    def set_syntax(self, syntax):
+        _throw_unimpl()
 
-    def prettyPrintRegisters(self, regs):
-        print('Registers...')
-        print(regs)
+    def get_gpr_registers(self):
+        _throw_unimpl()
+
+    def get_arch(self):
+        _throw_unimpl()
+
+    def print_gp_registers(self, regs):
+        print(red('Registers...'))
+
+        for r in arch_gpregs:
+            v = regs[r]
+            print(r.upper().ljust(3, ' ') + ': ' + v)
+
         print('End Registers...')
 
     def prettyPrintCode(self, code):
@@ -48,7 +66,7 @@ class Debugger:
 
 class GDBDBG(Debugger):
     def register_hooks(self):
-        gdb.events.stop.connect(self.stop_hook)
+        gdb.events.stop.connect(stop_hook)
 
     def stop_hook(a, b):
         print('bbbbb')
@@ -57,7 +75,6 @@ class GDBDBG(Debugger):
         pass
 
     def add_aliases(self):
-
         pass
 
     def _executeCommand(self, str):
@@ -74,24 +91,45 @@ class LLDBDBG(Debugger):
     
     def register_hooks(self):
         self._executeCommand('target stop-hook add -o context')
+    
+    def get_arch(self):
+        return "x86_64", 8
 
     def initialize_ui(self):
         self._executeCommand('settings set stop-disassembly-display never')
-    
-    def context(self, dbger, cmd, ctx, ret, sdict):
-        print(red('printing context...'))
-        self.printRegisters(dbger)
-        self.printCode(dbger)
-        self.printStack(dbger)
 
-    def printRegisters(self, debugger):
-        self.prettyPrintRegisters(['rax'])
+    def set_syntax(self, syntax):
+        self._executeCommand('settings set target.x86-disassembly-flavor ' + syntax)
     
-    def printCode(self, debugger):
-        self.prettyPrintCode('mov rax, rax')
+    def _hard_get_registers(self, debugger):
+        #ret, err = self._executeCommandWithRet(debugger, 'register read')
+        #print(ret.GetOutput())
+        # this is for when the frame just doesn't have registers for some reason...
+        pass
+
+    def get_current_frame(self):
+        return lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetSelectedFrame()
+
+    def get_gpr_registers(self):
+        frame = self.get_current_frame()
+        #print(frame.GetRegisters())
+        gprs = frame.GetRegisters().GetFirstValueByName('General Purpose Registers')
+
+        rvals = dict()
+
+        if not gprs.IsValid():
+            print('Empty register set.. should hard get?')
+            #regs = self._hard_get_registers(debugger)
+        else:
+            for reg in gprs:
+                rvals[reg.GetName()] = reg.GetValue()
+        return rvals
+        
+    def print_disasm(self):
+        print(red('mov rax, rax'))
     
-    def printStack(self, debugger):
-        self.prettyPrintStack('00000000000')
+    def print_stack(self):
+        print(red('00000000000'))
 
     def initialize_ui(self):
         pass
@@ -103,9 +141,9 @@ class LLDBDBG(Debugger):
         pass
 
     def add_aliases(self):
-        self._executeCommand('command script add --function pd.dbg.context context')
-        self._executeCommand('command script add --function pd.dbg.context ctx')
-        self._executeCommand('command script add --function pd.dbg.context ct')
+        self._executeCommand('command script add --function pd.context context')
+        self._executeCommand('command script add --function pd.context ctx')
+        self._executeCommand('command script add --function pd.context ct')
 
         self._executeCommand('command script add --function pd.dbg.start start')
 
@@ -115,12 +153,7 @@ class LLDBDBG(Debugger):
         # xrefs, heap stuff
         # libc, heap, ld (print base)
         # heapinfo, magic, one_gadget, canary
-        # findmainarea
-
-    def _executeCommandWithRet(self, inp):
-        ret = lldb.SBCommandRetwddurnObject()
-        self.debugger.GetCommandInterpreter().HandleCommand(inp, ret)
-        return ret
+        # findmainarea, fpu (floating point registers/stack)
 
     def _executeCommand(self, inp):
         self.debugger.HandleCommand(inp)
@@ -128,10 +161,10 @@ class LLDBDBG(Debugger):
     def set_prompt(self, pstr):
         self._executeCommand("settings set prompt '" + pstr + "'")
 
-    def _executeCommandWithRet(self, str):
-        ret = lldb.SBCommandRetwddurnObject()
-        self.debugger.GetCommandInterpreter().HandleCommand(str, ret)
-        return ret
+    def _executeCommandWithRet(self, s):
+        ret = lldb.SBCommandReturnObject()
+        err = self.debugger.GetCommandInterpreter().HandleCommand(s, ret)
+        return ret, err
 
     def _executeCommand(self, str):
         self.debugger.HandleCommand(str)
@@ -153,12 +186,49 @@ if dbg is None:
     print('What debugger are you using?')
     raise Exception('Cannot determine debugger')
 
+# --- Handle UI --- 
+
+def context(*args):
+    if current_arch is None:
+        determine_arch()
+    regs = dbg.get_gpr_registers()
+    dbg.print_gp_registers(regs)
+    dbg.print_disasm()
+    dbg.print_stack()
+
+def stop_hook(*args):
+    lldb.SBPlatformShellCommand().Clear()
+    context(args)
+
 # --- hopefully figured out debugger --- 
 # --- run initialization ---
+
+# maybe this should be a better data type.. that way i can look up 'ah' -> 'eax' easily
+arch_gpr_map = {
+    'x86':      ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'eip', 'eflags'],
+    'x86_64':   ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'rip', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15', 'rflags']
+}
+
+def determine_arch():
+    global current_arch
+    global pointer_size
+    global arch_gpregs
+    archs, size = dbg.get_arch()
+
+    if archs in arch_gpr_map:
+        arch_gpregs = arch_gpr_map[archs]
+    else:
+        print('Unsupported arch?')
+
+    pointer_size = size
+    current_arch = archs
+    print(arch_gpregs)
+    print(current_arch)
 
 dbg.set_prompt("(pd) ")
 
 dbg.add_aliases()
 dbg.initialize_ui()
+dbg.set_syntax('intel') # you want this
 
 dbg.register_hooks()
