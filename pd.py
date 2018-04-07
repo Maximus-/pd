@@ -29,8 +29,6 @@ def red(x):
     return _START_COLOR + '31m' + x + _RESET_ATTRS
 
 current_arch = None
-pointer_size = 0
-arch_gpregs = []
 
 class Debugger:
     def set_prompt(self, astr):
@@ -39,30 +37,41 @@ class Debugger:
     def set_syntax(self, syntax):
         _throw_unimpl()
 
-    def get_gpr_registers(self):
+    def get_gp_registers(self):
+        _throw_unimpl()
+
+    def get_gpr_val(self, reg):
         _throw_unimpl()
 
     def get_arch(self):
         _throw_unimpl()
 
     def print_gp_registers(self, regs):
-        print(red('Registers...'))
+        print(red('[-------registers------]'))
 
-        for r in arch_gpregs:
-            v = regs[r]
-            print(r.upper().ljust(3, ' ') + ': ' + v)
+        for r in current_arch.gp_regs:
+            if r in regs:
+                v = regs[r]
+                print(r.upper().ljust(3, ' ') + ': ' + '0x{:x}'.format(v))
 
-        print('End Registers...')
+        flags = current_arch.gp_flags
+        if flags in regs:
+            print(red(flags.upper()) + ': ' + '0x{:x}'.format(regs[flags]))
+        # flags: CF:0x1, PF:0x4, AF:0x10, ZF:0x40, SF:0x80, TF:0x100, OF:0x800
+        # can probably ignore DF/IF... (and the fancier EFLAGS)
 
-    def prettyPrintCode(self, code):
-        print('Code...')
-        print(code)
-        print('End Code...')
+    def print_disasm(self):
+        print(red('[---------code---------]'))
 
-    def prettyPrintStack(self, stack):
-        print('Stack...')
-        print(stack)
-        print('End Stack...')
+    def print_stack(self):
+        print(red('[---------stack--------]'))
+        sp = self.get_gpr_val(current_arch.stack_pointer)
+        
+        if sp is None:
+            return
+
+        for i in range(8):
+            print(('%04d| ' % (8 * i)) + hex(sp + 8 * i))
 
 class GDBDBG(Debugger):
     def register_hooks(self):
@@ -101,6 +110,12 @@ class LLDBDBG(Debugger):
     def set_syntax(self, syntax):
         self._executeCommand('settings set target.x86-disassembly-flavor ' + syntax)
     
+    def get_gpr_val(self, reg):
+        regs = self.get_gp_registers()
+        if reg in regs:
+            return regs[reg]
+        return None
+
     def _hard_get_registers(self, debugger):
         #ret, err = self._executeCommandWithRet(debugger, 'register read')
         #print(ret.GetOutput())
@@ -110,7 +125,7 @@ class LLDBDBG(Debugger):
     def get_current_frame(self):
         return lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetSelectedFrame()
 
-    def get_gpr_registers(self):
+    def get_gp_registers(self):
         frame = self.get_current_frame()
         #print(frame.GetRegisters())
         gprs = frame.GetRegisters().GetFirstValueByName('General Purpose Registers')
@@ -122,14 +137,8 @@ class LLDBDBG(Debugger):
             #regs = self._hard_get_registers(debugger)
         else:
             for reg in gprs:
-                rvals[reg.GetName()] = reg.GetValue()
+                rvals[reg.GetName()] = int(reg.GetValue(), 16)
         return rvals
-        
-    def print_disasm(self):
-        print(red('mov rax, rax'))
-    
-    def print_stack(self):
-        print(red('00000000000'))
 
     def initialize_ui(self):
         pass
@@ -191,39 +200,52 @@ if dbg is None:
 def context(*args):
     if current_arch is None:
         determine_arch()
-    regs = dbg.get_gpr_registers()
+    regs = dbg.get_gp_registers()
     dbg.print_gp_registers(regs)
     dbg.print_disasm()
     dbg.print_stack()
 
 def stop_hook(*args):
-    lldb.SBPlatformShellCommand().Clear()
     context(args)
 
 # --- hopefully figured out debugger --- 
 # --- run initialization ---
 
 # maybe this should be a better data type.. that way i can look up 'ah' -> 'eax' easily
+# also handling flags..
 arch_gpr_map = {
-    'x86':      ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'eip', 'eflags'],
-    'x86_64':   ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'rip', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15', 'rflags']
+        'x86':      {   'gpr': ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'eip', 'eflags'], 
+                        'sp': 'esp',
+                        'flags': 'eflags' },
+        'x86_64':   {   'gpr': ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'rip', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15'], 
+                        'flags': 'rflags',
+                        'sp': 'rsp' }
 }
+
+class ArchInfo():
+    def __init__(self, name, ptr_size, regs, stack_pointer, flags_reg):
+        self.pointer_size = ptr_size
+        self.gp_regs = regs
+        self.stack_pointer = stack_pointer
+        self.gp_flags = flags_reg
 
 def determine_arch():
     global current_arch
-    global pointer_size
-    global arch_gpregs
+
     archs, size = dbg.get_arch()
+    arch_gpregs = []
+    flags_gpreg = None
+    stack_pointer = None
 
     if archs in arch_gpr_map:
-        arch_gpregs = arch_gpr_map[archs]
+        arch_gpregs = arch_gpr_map[archs]['gpr']
+        flags_gpreg = arch_gpr_map[archs]['flags']
+        stack_pointer = arch_gpr_map[archs]['sp']
     else:
         print('Unsupported arch?')
-
-    pointer_size = size
-    current_arch = archs
-    print(arch_gpregs)
-    print(current_arch)
+        return
+    
+    current_arch = ArchInfo(archs, size, arch_gpregs, stack_pointer, flags_gpreg)
 
 dbg.set_prompt("(pd) ")
 
