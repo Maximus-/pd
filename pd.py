@@ -1,9 +1,18 @@
 # PD - Best debug; Fork of PEDA
 # TODO: syscalls
 import inspect
+import struct
 
 __gdbModule = None
 __lldbModule = None
+
+def unpack(fmt, data):
+    size = struct.calcsize(fmt)
+    rfmt = fmt
+    outp = struct.unpack(rfmt, data)
+    if len(outp) == 1:
+        return outp[0]
+    return outp
 
 # --- try import dbg lib ---
 try:
@@ -28,6 +37,9 @@ _RESET_ATTRS = '\x1b[0m'
 def red(x):
     return _START_COLOR + '31m' + x + _RESET_ATTRS
 
+def green(x):
+    return _START_COLOR + '32m' + x + _RESET_ATTRS
+
 current_arch = None
 
 class Debugger:
@@ -43,6 +55,9 @@ class Debugger:
     def get_gpr_val(self, reg):
         _throw_unimpl()
 
+    def get_memory(self, addr):
+        _throw_unimpl()
+
     def get_arch(self):
         _throw_unimpl()
 
@@ -52,7 +67,7 @@ class Debugger:
         for r in current_arch.gp_regs:
             if r in regs:
                 v = regs[r]
-                print(r.upper().ljust(3, ' ') + ': ' + '0x{:x}'.format(v))
+                print(green(r.upper().ljust(3, ' ')) + ': ' + '0x{:x}'.format(v))
 
         flags = current_arch.gp_flags
         if flags in regs:
@@ -71,7 +86,7 @@ class Debugger:
             return
 
         for i in range(8):
-            print(('%04d| ' % (8 * i)) + hex(sp + 8 * i))
+            print(('%04d| ' % (8 * i)) + hex(sp + 8 * i) + ' -> ' + hex(self.get_memory(sp+8*i)))
 
 class GDBDBG(Debugger):
     def register_hooks(self):
@@ -104,6 +119,13 @@ class LLDBDBG(Debugger):
     def get_arch(self):
         return "x86_64", 8
 
+    def get_memory(self, addr):
+        err = lldb.SBError()
+        process = self.get_current_process()
+        mem = process.ReadMemory(addr, 8, err)
+        val = unpack("<Q", mem)
+        return val
+
     def initialize_ui(self):
         self._executeCommand('settings set stop-disassembly-display never')
 
@@ -122,8 +144,11 @@ class LLDBDBG(Debugger):
         # this is for when the frame just doesn't have registers for some reason...
         pass
 
+    def get_current_process(self):
+        return lldb.debugger.GetSelectedTarget().GetProcess()
+
     def get_current_frame(self):
-        return lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetSelectedFrame()
+        return self.get_current_process().GetSelectedThread().GetSelectedFrame()
 
     def get_gp_registers(self):
         frame = self.get_current_frame()
