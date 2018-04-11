@@ -40,6 +40,9 @@ def red(x):
 def green(x):
     return _START_COLOR + '32m' + x + _RESET_ATTRS
 
+def blue(x):
+    return _START_COLOR + '34m' + x + _RESET_ATTRS
+
 current_arch = None
 
 class Debugger:
@@ -61,13 +64,42 @@ class Debugger:
     def get_arch(self):
         _throw_unimpl()
 
+    def get_vmmap(self):
+        # should i really make this a binary heap?
+        # maybe premature optimization
+        _throw_unimpl()
+    
+    def get_permissions_for_addr(self, addr):
+        _throw_unimpl()
+
+    def is_mapped(self, addr):
+        _throw_unimpl()
+
     def print_gp_registers(self, regs):
         print(red('[-------registers------]'))
 
-        for r in current_arch.gp_regs:
-            if r in regs:
+        layout_tiniest = False
+        if layout_tiniest:
+            idx = 0
+            line = ''
+            for r in current_arch.gp_regs:
+                reg = green(r.upper().ljust(3, ' '))
+                if r not in regs:
+                    continue
                 v = regs[r]
-                print(green(r.upper().ljust(3, ' ')) + ': ' + '0x{:x}'.format(v))
+                val = '0x{:x}'.format(v)
+                cp = reg + ': ' + val
+                line += cp.ljust(33, ' ')
+                idx += 1
+                if idx % 2 == 0:
+                    print(line)
+                    line = ''
+                
+        else:
+            for r in current_arch.gp_regs:
+                if r in regs:
+                    v = regs[r]
+                    print(green(r.upper().ljust(3, ' ')) + ': ' + '0x{:x}'.format(v))
 
         flags = current_arch.gp_flags
         if flags in regs:
@@ -86,7 +118,7 @@ class Debugger:
             return
 
         for i in range(8):
-            print(('%04d| ' % (8 * i)) + hex(sp + 8 * i) + ' -> ' + hex(self.get_memory(sp+8*i)))
+            print(('%04d| ' % (8 * i)) + blue(hex(sp + 8 * i)) + ' -> ' + hex(self.get_memory(sp+8*i)))
 
 class GDBDBG(Debugger):
     def register_hooks(self):
@@ -166,8 +198,10 @@ class LLDBDBG(Debugger):
         return rvals
 
     def initialize_ui(self):
+        # settings set stop-disassembly-display never 
+        # :( i wish i didn't have to do my own disasm...
         pass
-    
+
     def start(self, cmd, result, m, b, c):
         self._executeCommand('process launch --stop-at-entry')
     
