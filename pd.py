@@ -2,6 +2,7 @@
 # TODO: syscalls
 import inspect
 import struct
+import sys
 
 __gdbModule = None
 __lldbModule = None
@@ -31,17 +32,20 @@ except ImportError:
 def _throw_unimpl():
     raise Exception('Method unimplemented: ' + inspect.stack()[0][3])
 
-_START_COLOR = '\x1b['
+_START_ATTR = '\x1b['
 _RESET_ATTRS = '\x1b[0m'
 
 def red(x):
-    return _START_COLOR + '31m' + x + _RESET_ATTRS
+    return _START_ATTR + '31m' + x + _RESET_ATTRS
 
 def green(x):
-    return _START_COLOR + '32m' + x + _RESET_ATTRS
+    return _START_ATTR + '32m' + x + _RESET_ATTRS
 
 def blue(x):
-    return _START_COLOR + '34m' + x + _RESET_ATTRS
+    return _START_ATTR + '34m' + x + _RESET_ATTRS
+
+def bold(x):
+    return _START_ATTR + '1m' + x + _RESET_ATTRS
 
 current_arch = None
 
@@ -103,12 +107,25 @@ class Debugger:
 
         flags = current_arch.gp_flags
         if flags in regs:
-            print(red(flags.upper()) + ': ' + '0x{:x}'.format(regs[flags]))
-        # flags: CF:0x1, PF:0x4, AF:0x10, ZF:0x40, SF:0x80, TF:0x100, OF:0x800
-        # can probably ignore DF/IF... (and the fancier EFLAGS)
+            curr_flags = regs[flags]
+            flags_line = red(flags.upper()) + ': ' + '0x{:x}'.format(curr_flags)
+            flags_line += ' ('
+            fls = []
+            for fl in current_arch.flags:
+                if (1 << fl) & curr_flags:
+                    fls.append(bold(red(current_arch.flags[fl].upper())))
+                else:
+                    fls.append(green(current_arch.flags[fl].lower()))
+
+            flags_line += ' '.join(fls)
+            flags_line += ')'
+            print(flags_line)
 
     def print_disasm(self):
         print(red('[---------code---------]'))
+        vv = self.get_current_frame().Disassemble()
+        print(vv)
+
 
     def print_stack(self):
         print(red('[---------stack--------]'))
@@ -144,6 +161,7 @@ class LLDBDBG(Debugger):
     debugger = None
     def __init__(self):
         self.debugger = lldb.debugger
+        self.debugger.SetAsync(True)
     
     def register_hooks(self):
         self._executeCommand('target stop-hook add -o context')
@@ -198,7 +216,7 @@ class LLDBDBG(Debugger):
         return rvals
 
     def initialize_ui(self):
-        # settings set stop-disassembly-display never 
+        self._executeCommand("settings set stop-disassembly-display never")
         # :( i wish i didn't have to do my own disasm...
         pass
 
@@ -260,6 +278,7 @@ def context(*args):
     if current_arch is None:
         determine_arch()
     regs = dbg.get_gp_registers()
+    sys.stdout.write("\x1b[2J\x1b[H")
     dbg.print_gp_registers(regs)
     dbg.print_disasm()
     dbg.print_stack()
@@ -272,21 +291,27 @@ def stop_hook(*args):
 
 # maybe this should be a better data type.. that way i can look up 'ah' -> 'eax' easily
 # also handling flags..
+
 arch_gpr_map = {
         'x86':      {   'gpr': ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'eip', 'eflags'], 
                         'sp': 'esp',
-                        'flags': 'eflags' },
+                        'flags_reg': 'eflags',
+                        'flags': { 1: 'CF', 2: 'PF', 4: 'AF', 6: 'ZF', 7: 'SF', 8: 'TF', 9: 'IF', 10: 'DF', 11: 'OF' }
+                        },
         'x86_64':   {   'gpr': ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'rip', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15'], 
-                        'flags': 'rflags',
-                        'sp': 'rsp' }
+                        'flags_reg': 'rflags',
+                        'sp': 'rsp',
+                        'flags': { 1: 'CF', 2: 'PF', 4: 'AF', 6: 'ZF', 7: 'SF', 8: 'TF', 9: 'IF', 10: 'DF', 11: 'OF' }
+                        }
 }
 
 class ArchInfo():
-    def __init__(self, name, ptr_size, regs, stack_pointer, flags_reg):
+    def __init__(self, name, ptr_size, regs, stack_pointer, flags_reg, flags):
         self.pointer_size = ptr_size
         self.gp_regs = regs
         self.stack_pointer = stack_pointer
         self.gp_flags = flags_reg
+        self.flags = flags
 
 def determine_arch():
     global current_arch
@@ -295,16 +320,18 @@ def determine_arch():
     arch_gpregs = []
     flags_gpreg = None
     stack_pointer = None
+    flags = None
 
     if archs in arch_gpr_map:
         arch_gpregs = arch_gpr_map[archs]['gpr']
-        flags_gpreg = arch_gpr_map[archs]['flags']
+        flags_gpreg = arch_gpr_map[archs]['flags_reg']
         stack_pointer = arch_gpr_map[archs]['sp']
+        flags = arch_gpr_map[archs]['flags']
     else:
         print('Unsupported arch?')
         return
     
-    current_arch = ArchInfo(archs, size, arch_gpregs, stack_pointer, flags_gpreg)
+    current_arch = ArchInfo(archs, size, arch_gpregs, stack_pointer, flags_gpreg, flags)
 
 dbg.set_prompt("(pd) ")
 
