@@ -123,8 +123,23 @@ class Debugger:
 
     def print_disasm(self):
         print(red('[---------code---------]'))
-        vv = self.get_current_frame().Disassemble()
-        print(vv)
+        vv = self.get_current_frame().Disassemble().split('\n')[:-1]
+        found_c = -1
+        disasm = []
+        for l in vv:
+            if len(disasm) > 7:
+                disasm = disasm[1:]
+            disasm.append(l)
+            if l[0:2] == '->':
+                found_c = 0
+
+            if found_c >= 0:
+                found_c += 1
+
+            if found_c == 5:
+                break
+
+        print('\n'.join(disasm))
 
 
     def print_stack(self):
