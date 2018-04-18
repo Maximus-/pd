@@ -31,7 +31,7 @@ except ImportError:
 # --- end try import dbg lib --- 
 
 def _throw_unimpl():
-    raise Exception('Method unimplemented: ' + inspect.stack()[0][3])
+    raise Exception('Method unimplemented: ' + repr(inspect.stack()))
 
 _START_ATTR = '\x1b['
 _RESET_ATTRS = '\x1b[0m'
@@ -123,8 +123,8 @@ class Debugger:
             print(flags_line)
 
     def shell(self, cmd):
-        return os.system(cmd)
-
+        _throw_unimpl()
+    
     def print_disasm(self):
         print(red('[---------code---------]'))
         cframe = self.get_current_frame()
@@ -165,6 +165,15 @@ class GDBDBG(Debugger):
     def register_hooks(self):
         gdb.events.stop.connect(stop_hook)
 
+    def shell(self, cmd):
+        return self._executeCommand('shell ' + cmd)
+
+    def get_arch(self):
+        return "x86_64", 8
+
+    def set_syntax(self, syntax):
+        self._executeCommand("set disassembly-flavor " + syntax)
+
     def stop_hook(a, b):
         print('bbbbb')
 
@@ -174,11 +183,12 @@ class GDBDBG(Debugger):
     def add_aliases(self):
         pass
 
-    def _executeCommand(self, str):
-        pass
+    def _executeCommand(self, st):
+        # currently there'sno way to capture this output.. :(
+        return gdb.execute(st, to_string=True)
 
     def set_prompt(self, pstr):
-        gdb.execute('set prompt ' + red(pstr))
+        self._executeCommand('set prompt ' + red(pstr))
         pass
 
 class LLDBDBG(Debugger):
@@ -211,6 +221,9 @@ class LLDBDBG(Debugger):
         if reg in regs:
             return regs[reg]
         return None
+
+    def shell(self, cmd):
+        return os.system(cmd)
 
     def _hard_get_registers(self, debugger):
         #ret, err = self._executeCommandWithRet(debugger, 'register read')
@@ -362,7 +375,8 @@ def determine_arch():
         return
     
     hostos = None
-    uname = os.system("uname")
+    uname = dbg.shell("uname")
+    print('UNAME:' + uname)
     if uname == "Linux":
         hostos = "linux"
     elif uname == "Darwin":
