@@ -3,6 +3,7 @@
 import inspect
 import struct
 import sys
+import os
 
 __gdbModule = None
 __lldbModule = None
@@ -121,8 +122,8 @@ class Debugger:
             flags_line += ')'
             print(flags_line)
 
-        def shell(self, cmd);
-            return os.system(cmd)
+    def shell(self, cmd):
+        return os.system(cmd)
 
     def print_disasm(self):
         print(red('[---------code---------]'))
@@ -339,7 +340,7 @@ class ArchInfo():
         self.stack_pointer = stack_pointer
         self.gp_flags = flags_reg
         self.flags = flags
-        self.arch = host
+        self.arch = host_arch
         self.os = host_os
 
 def determine_arch():
@@ -356,7 +357,7 @@ def determine_arch():
         flags_gpreg = arch_gpr_map[archs]['flags_reg']
         stack_pointer = arch_gpr_map[archs]['sp']
         flags = arch_gpr_map[archs]['flags']
-    else
+    else:
         print('Unsupported arch?')
         return
     
