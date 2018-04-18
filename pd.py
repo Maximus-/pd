@@ -121,9 +121,18 @@ class Debugger:
             flags_line += ')'
             print(flags_line)
 
+        def shell(self, cmd);
+            return os.system(cmd)
+
     def print_disasm(self):
         print(red('[---------code---------]'))
-        vv = self.get_current_frame().Disassemble().split('\n')[:-1]
+        cframe = self.get_current_frame()
+        if cframe is None:
+            return
+        vv = cframe.Disassemble()
+        if vv is None:
+            return
+        vv = vv.split('\n')[:-1]
         found_c = -1
         disasm = []
         for l in vv:
@@ -140,7 +149,6 @@ class Debugger:
                 break
 
         print('\n'.join(disasm))
-
 
     def print_stack(self):
         print(red('[---------stack--------]'))
@@ -239,6 +247,10 @@ class LLDBDBG(Debugger):
         self._executeCommand('process launch --stop-at-entry')
     
     def vmmap(self, cmd, result, m, b, c):
+        proc = self.get_current_process()
+        pid = proc.GetProcessID()
+        print('pid: ' + str(pid))
+
         pass
 
     def add_aliases(self):
@@ -321,12 +333,14 @@ arch_gpr_map = {
 }
 
 class ArchInfo():
-    def __init__(self, name, ptr_size, regs, stack_pointer, flags_reg, flags):
+    def __init__(self, host_arch, host_os, ptr_size, regs, stack_pointer, flags_reg, flags):
         self.pointer_size = ptr_size
         self.gp_regs = regs
         self.stack_pointer = stack_pointer
         self.gp_flags = flags_reg
         self.flags = flags
+        self.arch = host
+        self.os = host_os
 
 def determine_arch():
     global current_arch
@@ -342,11 +356,20 @@ def determine_arch():
         flags_gpreg = arch_gpr_map[archs]['flags_reg']
         stack_pointer = arch_gpr_map[archs]['sp']
         flags = arch_gpr_map[archs]['flags']
-    else:
+    else
         print('Unsupported arch?')
         return
     
-    current_arch = ArchInfo(archs, size, arch_gpregs, stack_pointer, flags_gpreg, flags)
+    hostos = None
+    uname = os.system("uname")
+    if uname == "Linux":
+        hostos = "linux"
+    elif uname == "Darwin":
+        hostos = "mac"
+    if hostos is None:
+        print("Unknown arch.. beware")
+
+    current_arch = ArchInfo(archs, hostos, size, arch_gpregs, stack_pointer, flags_gpreg, flags)
 
 dbg.set_prompt("(pd) ")
 
