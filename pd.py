@@ -295,7 +295,7 @@ class LLDBDBG(Debugger):
 
         return None
 
-    def vmmap(self, cmd, result, m, b, c):
+    def vmmap(self, cmd, result, m, b, c=None):
         # color laer... : p
         vmaps = self.get_virtual_maps()
 
