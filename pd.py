@@ -48,7 +48,6 @@ def blue(x):
 def bold(x):
     return _START_ATTR + '1m' + x + _RESET_ATTRS
 
-
 class Debugger:
     current_arch = None
     def set_prompt(self, astr):
@@ -69,9 +68,19 @@ class Debugger:
     def get_arch(self):
         _throw_unimpl()
 
-    def get_vmmap(self):
+    def get_virtual_maps(self):
         # should i really make this a binary heap?
         # maybe premature optimization
+        _throw_unimpl()
+
+    def get_heap_base(self):
+        vmaps = self.get_virtual_maps()
+        for mp in vmaps:
+            if mp.name == "[heap]":
+                return mp
+        return None
+
+    def get_current_disasm(self):
         _throw_unimpl()
 
     def parse_linux_vmmap(self, memstr):
@@ -91,7 +100,8 @@ class Debugger:
             beg = int(terms[0].split('-')[0], 16)
             end = int(terms[0].split('-')[1], 16)
             full_maps.append(MemoryMap(beg,end, terms[1], terms[-1]))
-        print(full_maps)
+        
+        return full_maps
     
     def get_permissions_for_addr(self, addr):
         _throw_unimpl()
@@ -102,28 +112,10 @@ class Debugger:
     def print_gp_registers(self, regs):
         print(red('[-------registers------]'))
 
-        layout_tiniest = False
-        if layout_tiniest:
-            idx = 0
-            line = ''
-            for r in self.current_arch.gp_regs:
-                reg = green(r.upper().ljust(3, ' '))
-                if r not in regs:
-                    continue
+        for r in self.current_arch.gp_regs:
+            if r in regs:
                 v = regs[r]
-                val = '0x{:x}'.format(v)
-                cp = reg + ': ' + val
-                line += cp.ljust(33, ' ')
-                idx += 1
-                if idx % 2 == 0:
-                    print(line)
-                    line = ''
-                
-        else:
-            for r in self.current_arch.gp_regs:
-                if r in regs:
-                    v = regs[r]
-                    print(green(r.upper().ljust(3, ' ')) + ': ' + '0x{:x}'.format(v))
+                print(green(r.upper().ljust(3, ' ')) + ': ' + '0x{:x}'.format(v))
 
         flags = self.current_arch.gp_flags
         if flags in regs:
@@ -146,29 +138,9 @@ class Debugger:
     
     def print_disasm(self):
         print(red('[---------code---------]'))
-        cframe = self.get_current_frame()
-        if cframe is None:
-            return
-        vv = cframe.Disassemble()
-        if vv is None:
-            return
-        vv = vv.split('\n')[:-1]
-        found_c = -1
-        disasm = []
-        for l in vv:
-            if len(disasm) > 7:
-                disasm = disasm[1:]
-            disasm.append(l)
-            if l[0:2] == '->':
-                found_c = 0
 
-            if found_c >= 0:
-                found_c += 1
-
-            if found_c == 5:
-                break
-
-        print('\n'.join(disasm))
+        disasm = self.get_current_disasm()
+        print(disasm)
 
     def print_stack(self):
         print(red('[---------stack--------]'))
@@ -178,7 +150,9 @@ class Debugger:
             return
 
         for i in range(8):
-            print(('%04d| ' % (8 * i)) + blue(hex(sp + 8 * i)) + ' -> ' + hex(self.get_memory(sp+8*i)))
+            mem = self.get_memory(sp + 8*i, 8)
+            stack_val = unpack("<Q", mem)
+            print(('%04d| ' % (8 * i)) + blue(hex(sp + 8 * i)) + ' -> ' + hex(stack_val))
 
 class GDBDBG(Debugger):
     def register_hooks(self):
@@ -222,12 +196,11 @@ class LLDBDBG(Debugger):
     def get_arch(self):
         return "x86_64", 8
 
-    def get_memory(self, addr):
+    def get_memory(self, addr, size):
         err = lldb.SBError()
         process = self.get_current_process()
-        mem = process.ReadMemory(addr, 8, err)
-        val = unpack("<Q", mem)
-        return val
+        mem = process.ReadMemory(addr, size, err)
+        return mem
 
     def initialize_ui(self):
         self._executeCommand('settings set stop-disassembly-display never')
@@ -243,6 +216,31 @@ class LLDBDBG(Debugger):
 
     def shell(self, cmd):
         return os.system(cmd)
+
+    def get_current_disasm(self):
+        cframe = self.get_current_frame()
+        if cframe is None:
+            return
+        vv = cframe.Disassemble()
+        if vv is None:
+            return
+        vv = vv.split('\n')[:-1]
+        found_c = -1
+        disasm = []
+        for l in vv:
+            if len(disasm) > 7:
+                disasm = disasm[1:]
+            disasm.append(l)
+            if l[0:2] == '->':
+                found_c = 0
+
+            if found_c >= 0:
+                found_c += 1
+
+            if found_c == 5:
+                break
+
+        return '\n'.join(disasm)
 
     def _hard_get_registers(self, debugger):
         #ret, err = self._executeCommandWithRet(debugger, 'register read')
@@ -284,18 +282,25 @@ class LLDBDBG(Debugger):
     def start(self, cmd, result, m, b, c=None):
         self._executeCommand('process launch --stop-at-entry')
     
-    def vmmap(self, cmd, result, m, b, c):
+    def get_virtual_maps(self):
         proc = self.get_current_process()
         pid = proc.GetProcessID()
 
         if self.current_arch.os == "linux":
             pp = open('/proc/' + str(pid) + '/maps', 'rb').read()
             return self.parse_linux_vmmap(pp)
-            pass
         elif self.current_arch.os == "mac":
+            # run vmmap
             pass
 
         return None
+
+    def vmmap(self, cmd, result, m, b, c):
+        # color laer... : p
+        vmaps = self.get_virtual_maps()
+
+        for mp in vmaps:
+            print('%s-%s %s' % (hex(mp.begin), hex(mp.end), mp.name))
 
     def add_aliases(self):
         self._executeCommand('command script add --function pd.context context')
@@ -365,19 +370,21 @@ def stop_hook(*args):
 
 arch_gpr_map = {
         'x86':      {   'gpr': ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'eip', 'eflags'], 
+                        'pc': 'eip',
                         'sp': 'esp',
                         'flags_reg': 'eflags',
                         'flags': { 1: 'CF', 2: 'PF', 4: 'AF', 6: 'ZF', 7: 'SF', 8: 'TF', 9: 'IF', 10: 'DF', 11: 'OF' }
                         },
         'x86_64':   {   'gpr': ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'rip', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15'], 
-                        'flags_reg': 'rflags',
+                        'pc': 'rip',
                         'sp': 'rsp',
+                        'flags_reg': 'rflags',
                         'flags': { 1: 'CF', 2: 'PF', 4: 'AF', 6: 'ZF', 7: 'SF', 8: 'TF', 9: 'IF', 10: 'DF', 11: 'OF' }
                         }
 }
 
 class ArchInfo():
-    def __init__(self, host_arch, host_os, ptr_size, regs, stack_pointer, flags_reg, flags):
+    def __init__(self, host_arch, host_os, ptr_size, regs, pc, stack_pointer, flags_reg, flags):
         self.pointer_size = ptr_size
         self.gp_regs = regs
         self.stack_pointer = stack_pointer
@@ -385,6 +392,7 @@ class ArchInfo():
         self.flags = flags
         self.arch = host_arch
         self.os = host_os
+        self.pc_reg = pc
 
 def determine_arch():
     archs, size = dbg.get_arch()
@@ -398,6 +406,7 @@ def determine_arch():
         flags_gpreg = arch_gpr_map[archs]['flags_reg']
         stack_pointer = arch_gpr_map[archs]['sp']
         flags = arch_gpr_map[archs]['flags']
+        pc = arch_gpr_map[archs]['pc']
     else:
         print('Unsupported arch?')
         return
@@ -412,7 +421,7 @@ def determine_arch():
     if hostos is None:
         print("Unknown arch.. beware")
 
-    return ArchInfo(archs, hostos, size, arch_gpregs, stack_pointer, flags_gpreg, flags)
+    return ArchInfo(archs, hostos, size, arch_gpregs, pc, stack_pointer, flags_gpreg, flags)
 
 dbg.set_prompt("(pd) ")
 
