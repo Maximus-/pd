@@ -166,6 +166,7 @@ class GDBDBG(Debugger):
         gdb.events.stop.connect(stop_hook)
 
     def shell(self, cmd):
+        # will need a hack to capture this..
         return self._executeCommand('shell ' + cmd)
 
     def get_arch(self):
@@ -184,7 +185,6 @@ class GDBDBG(Debugger):
         pass
 
     def _executeCommand(self, st):
-        # currently there'sno way to capture this output.. :(
         return gdb.execute(st, to_string=True)
 
     def set_prompt(self, pstr):
@@ -240,7 +240,12 @@ class LLDBDBG(Debugger):
     def get_gp_registers(self):
         frame = self.get_current_frame()
         #print(frame.GetRegisters())
-        gprs = frame.GetRegisters().GetFirstValueByName('General Purpose Registers')
+        gprs = None
+        for a in frame.GetRegisters():
+            if str(a.GetName()).startswith('General'):
+                gprs = a
+                break
+        #gprs = frame.GetRegisters().GetFirstValueByName('General Purpose Registers')
 
         rvals = dict()
 
@@ -293,8 +298,8 @@ class LLDBDBG(Debugger):
         err = self.debugger.GetCommandInterpreter().HandleCommand(s, ret)
         return ret, err
 
-    def _executeCommand(self, str):
-        self.debugger.HandleCommand(str)
+    def _executeCommand(self, st):
+        self.debugger.HandleCommand(st)
 
     def set_prompt(self, pstr):
         self._executeCommand("settings set prompt '" + pstr + "'")
@@ -376,7 +381,7 @@ def determine_arch():
     
     hostos = None
     uname = dbg.shell("uname")
-    print('UNAME:' + uname)
+    print(uname)
     if uname == "Linux":
         hostos = "linux"
     elif uname == "Darwin":
