@@ -8,7 +8,7 @@ import os
 __gdbModule = None
 __lldbModule = None
 
-def unpack(fmt, data):
+def unpack(fmt, data): 
     size = struct.calcsize(fmt)
     rfmt = fmt
     outp = struct.unpack(rfmt, data)
@@ -48,9 +48,9 @@ def blue(x):
 def bold(x):
     return _START_ATTR + '1m' + x + _RESET_ATTRS
 
-current_arch = None
 
 class Debugger:
+    current_arch = None
     def set_prompt(self, astr):
         _throw_unimpl()
     
@@ -73,6 +73,25 @@ class Debugger:
         # should i really make this a binary heap?
         # maybe premature optimization
         _throw_unimpl()
+
+    def parse_linux_vmmap(self, memstr):
+        full_maps = []
+        class MemoryMap():
+            def __init__(self, begin, end, permissions, name):
+                self.begin = begin
+                self.end = end
+                self.permissions = permissions
+                self.name = name
+
+        maps = memstr.split('\n')
+        for lm in maps:
+            if len(lm) == 0: 
+                continue
+            terms = lm.split(' ')
+            beg = int(terms[0].split('-')[0], 16)
+            end = int(terms[0].split('-')[1], 16)
+            full_maps.append(MemoryMap(beg,end, terms[1], terms[-1]))
+        print(full_maps)
     
     def get_permissions_for_addr(self, addr):
         _throw_unimpl()
@@ -87,7 +106,7 @@ class Debugger:
         if layout_tiniest:
             idx = 0
             line = ''
-            for r in current_arch.gp_regs:
+            for r in self.current_arch.gp_regs:
                 reg = green(r.upper().ljust(3, ' '))
                 if r not in regs:
                     continue
@@ -101,22 +120,22 @@ class Debugger:
                     line = ''
                 
         else:
-            for r in current_arch.gp_regs:
+            for r in self.current_arch.gp_regs:
                 if r in regs:
                     v = regs[r]
                     print(green(r.upper().ljust(3, ' ')) + ': ' + '0x{:x}'.format(v))
 
-        flags = current_arch.gp_flags
+        flags = self.current_arch.gp_flags
         if flags in regs:
             curr_flags = regs[flags]
             flags_line = red(flags.upper()) + ': ' + '0x{:x}'.format(curr_flags)
             flags_line += ' ('
             fls = []
-            for fl in current_arch.flags:
+            for fl in self.current_arch.flags:
                 if (1 << fl) & curr_flags:
-                    fls.append(bold(red(current_arch.flags[fl].upper())))
+                    fls.append(bold(red(self.current_arch.flags[fl].upper())))
                 else:
-                    fls.append(green(current_arch.flags[fl].lower()))
+                    fls.append(green(self.current_arch.flags[fl].lower()))
 
             flags_line += ' '.join(fls)
             flags_line += ')'
@@ -153,7 +172,7 @@ class Debugger:
 
     def print_stack(self):
         print(red('[---------stack--------]'))
-        sp = self.get_gpr_val(current_arch.stack_pointer)
+        sp = self.get_gpr_val(self.current_arch.stack_pointer)
         
         if sp is None:
             return
@@ -262,15 +281,21 @@ class LLDBDBG(Debugger):
         # :( i wish i didn't have to do my own disasm...
         pass
 
-    def start(self, cmd, result, m, b, c):
+    def start(self, cmd, result, m, b, c=None):
         self._executeCommand('process launch --stop-at-entry')
     
     def vmmap(self, cmd, result, m, b, c):
         proc = self.get_current_process()
         pid = proc.GetProcessID()
-        print('pid: ' + str(pid))
 
-        pass
+        if self.current_arch.os == "linux":
+            pp = open('/proc/' + str(pid) + '/maps', 'rb').read()
+            return self.parse_linux_vmmap(pp)
+            pass
+        elif self.current_arch.os == "mac":
+            pass
+
+        return None
 
     def add_aliases(self):
         self._executeCommand('command script add --function pd.context context')
@@ -321,8 +346,8 @@ if dbg is None:
 # --- Handle UI --- 
 
 def context(*args):
-    if current_arch is None:
-        determine_arch()
+    if dbg.current_arch is None:
+        dbg.current_arch = determine_arch()
     regs = dbg.get_gp_registers()
     sys.stdout.write("\x1b[2J\x1b[H")
     dbg.print_gp_registers(regs)
@@ -362,8 +387,6 @@ class ArchInfo():
         self.os = host_os
 
 def determine_arch():
-    global current_arch
-
     archs, size = dbg.get_arch()
     arch_gpregs = []
     flags_gpreg = None
@@ -381,7 +404,7 @@ def determine_arch():
     
     hostos = None
     uname = dbg.shell("uname")
-    print(uname)
+    uname = "Linux"
     if uname == "Linux":
         hostos = "linux"
     elif uname == "Darwin":
@@ -389,7 +412,7 @@ def determine_arch():
     if hostos is None:
         print("Unknown arch.. beware")
 
-    current_arch = ArchInfo(archs, hostos, size, arch_gpregs, stack_pointer, flags_gpreg, flags)
+    return ArchInfo(archs, hostos, size, arch_gpregs, stack_pointer, flags_gpreg, flags)
 
 dbg.set_prompt("(pd) ")
 
