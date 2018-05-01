@@ -56,6 +56,9 @@ class Debugger:
     def set_syntax(self, syntax):
         _throw_unimpl()
 
+    def clear_screen(self):
+        sys.stdout.write("\x1b[2J\x1b[H")
+
     def get_gp_registers(self):
         _throw_unimpl()
 
@@ -81,7 +84,7 @@ class Debugger:
         return None
 
     def get_current_disasm(self):
-        _throw_unimpl()
+        return "disasm"
 
     def parse_linux_vmmap(self, memstr):
         full_maps = []
@@ -162,6 +165,23 @@ class GDBDBG(Debugger):
         # will need a hack to capture this..
         return self._executeCommand('shell ' + cmd)
 
+    def get_gp_registers(self):
+        regs = gdb.execute('info registers', to_string=True)
+        rlines = regs.split('\n')
+        regs = dict()
+        for line in rlines:
+            rv = line.split()
+            if len(rv) == 0:
+                continue
+            rname = rv[0]
+            rval = rv[1]
+            regs[rname] = int(rval, 16)
+
+        if regs['eflags']:
+            regs['rflags'] = regs['eflags']
+
+        return regs
+
     def get_arch(self):
         return "x86_64", 8
 
@@ -172,17 +192,27 @@ class GDBDBG(Debugger):
         print('bbbbb')
 
     def initialize_ui(self):
-        pass
+        self._executeCommand('set height 0')
 
     def add_aliases(self):
         pass
 
     def _executeCommand(self, st):
+        return gdb.execute(st)
+
+    # for some reason, calling set height 0 with to_string=True 
+    # doesnt do anything...
+    def _executeCommandWithResponse(self, st):
         return gdb.execute(st, to_string=True)
 
     def set_prompt(self, pstr):
         self._executeCommand('set prompt ' + red(pstr))
         pass
+
+    def get_memory(self, addr, size):
+        ptrType = gdb.lookup_type('unsigned long long').pointer()
+        val = gdb.Value(addr).cast(ptrType)
+        return val.dereference()
 
 class LLDBDBG(Debugger):
     debugger = None
@@ -258,9 +288,9 @@ class LLDBDBG(Debugger):
         frame = self.get_current_frame()
         #print(frame.GetRegisters())
         gprs = None
-        for a in frame.GetRegisters():
-            if str(a.GetName()).startswith('General'):
-                gprs = a
+        for rset in frame.GetRegisters():
+            if str(rset.GetName()).startswith('General'):
+                gprs = rset
                 break
         #gprs = frame.GetRegisters().GetFirstValueByName('General Purpose Registers')
 
@@ -336,7 +366,6 @@ class LLDBDBG(Debugger):
         pass
 
 # --- setup debugger instance --- 
-
 dbg = None
 
 if __gdbModule is not None:
@@ -347,14 +376,13 @@ if __lldbModule is not None:
 if dbg is None:
     print('What debugger are you using?')
     raise Exception('Cannot determine debugger')
-
 # --- Handle UI --- 
 
 def context(*args):
     if dbg.current_arch is None:
         dbg.current_arch = determine_arch()
     regs = dbg.get_gp_registers()
-    sys.stdout.write("\x1b[2J\x1b[H")
+    dbg.clear_screen()
     dbg.print_gp_registers(regs)
     dbg.print_disasm()
     dbg.print_stack()
@@ -430,3 +458,4 @@ dbg.initialize_ui()
 dbg.set_syntax('intel') # you want this
 
 dbg.register_hooks()
+
