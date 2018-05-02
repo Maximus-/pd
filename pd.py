@@ -63,13 +63,16 @@ class Debugger:
         _throw_unimpl()
 
     def get_gpr_val(self, reg):
-        _throw_unimpl()
+        return self.get_current_frame().read_register(reg)
 
     def get_memory(self, addr):
         _throw_unimpl()
 
     def get_arch(self):
         _throw_unimpl()
+
+    def get_current_frame(self):
+        return gdb.selected_frame()
 
     def get_virtual_maps(self):
         # should i really make this a binary heap?
