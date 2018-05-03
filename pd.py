@@ -63,16 +63,13 @@ class Debugger:
         _throw_unimpl()
 
     def get_gpr_val(self, reg):
-        return self.get_current_frame().read_register(reg)
+        _throw_unimpl()
 
     def get_memory(self, addr):
         _throw_unimpl()
 
     def get_arch(self):
         _throw_unimpl()
-
-    def get_current_frame(self):
-        return gdb.selected_frame()
 
     def get_virtual_maps(self):
         # should i really make this a binary heap?
@@ -147,18 +144,42 @@ class Debugger:
 
         disasm = self.get_current_disasm()
         print(disasm)
+    
+    def get_map_region_for_ptr(self, ptr):
+        maps = self.get_virtual_maps()
+        if maps is None:
+            return None
+        
+        for mp in maps:
+            if ptr > mp.begin and ptr < mp.end:
+                return mp
+
+        return None
 
     def print_stack(self):
         print(red('[---------stack--------]'))
         sp = self.get_gpr_val(self.current_arch.stack_pointer)
-        
+    
         if sp is None:
             return
 
         for i in range(8):
-            mem = self.get_memory(sp + 8*i, 8)
-            stack_val = unpack("<Q", mem)
-            print(('%04d| ' % (8 * i)) + blue(hex(sp + 8 * i)) + ' -> ' + hex(stack_val))
+            mem = int(unpack("<Q", (self.get_memory(sp + 8*i, 8))))
+            stack_val = mem
+
+            sline = '%04d| ' % (8 * i) + blue(hex(sp + 8 * i)) + ' -> ' + hex(stack_val)
+
+            iterval = stack_val
+            for i in range(10):
+                mp = self.get_map_region_for_ptr(iterval)
+
+                if not mp is None:
+                    iterval = int(unpack("<Q", self.get_memory(iterval, 8)))
+                    sline += ' -> ' + hex(iterval)
+                else:
+                    break
+
+            print(sline)
 
 class GDBDBG(Debugger):
     def register_hooks(self):
@@ -167,6 +188,9 @@ class GDBDBG(Debugger):
     def shell(self, cmd):
         # will need a hack to capture this..
         return self._executeCommand('shell ' + cmd)
+
+    def get_current_frame(self):
+        return gdb.selected_frame()
 
     def get_gp_registers(self):
         regs = gdb.execute('info registers', to_string=True)
@@ -184,6 +208,9 @@ class GDBDBG(Debugger):
             regs['rflags'] = regs['eflags']
 
         return regs
+
+    def get_gpr_val(self, reg):
+        return self.get_gp_registers()[reg]
 
     def get_arch(self):
         return "x86_64", 8
