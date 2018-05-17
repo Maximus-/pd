@@ -48,9 +48,48 @@ def blue(x):
 def bold(x):
     return _START_ATTR + '1m' + x + _RESET_ATTRS
 
+(OS_MAC, OS_LINUX, OS_UNK) = range(3)
+
+class ArchInfo():
+    def __init__(self, host_arch, host_os, ptr_size, regs, pc, stack_pointer, flags_reg, flags):
+        self.pointer_size = ptr_size
+        self.gp_regs = regs
+        self.stack_pointer = stack_pointer
+        self.gp_flags = flags_reg
+        self.flags = flags
+        self.arch = host_arch
+        self.os = host_os
+        self.pc_reg = pc
+
+class MemoryMap():
+    def __init__(self, begin, end, permissions, name):
+        self.begin = begin
+        self.end = end
+        self.permissions = permissions
+        self.name = name
+
+# Debugger
+#   - get_pid
+#   - set_asm_syntax
+#   - set_prompt
+#   - clear_screen
+#   - get_gp_registers
+#   - get_gpr_val
+#   - get_memory
+#   - get_virtual_maps
+#   - get_permissions_for_addr
+#   - get_map_region_for_ptr
+#   - is_mapped
+#   - get_heap_base
+#   - get_current_disasm
+#   - shell
+
 class Debugger:
     current_arch = None
     def set_prompt(self, astr):
+        _throw_unimpl()
+
+    def get_pid(self):
         _throw_unimpl()
     
     def set_syntax(self, syntax):
@@ -88,12 +127,6 @@ class Debugger:
 
     def parse_linux_vmmap(self, memstr):
         full_maps = []
-        class MemoryMap():
-            def __init__(self, begin, end, permissions, name):
-                self.begin = begin
-                self.end = end
-                self.permissions = permissions
-                self.name = name
 
         maps = memstr.split('\n')
         for lm in maps:
@@ -105,6 +138,9 @@ class Debugger:
             full_maps.append(MemoryMap(beg,end, terms[1], terms[-1]))
         
         return full_maps
+
+    def parse_osx_vmmap(self, memstr):
+        return []
     
     def get_permissions_for_addr(self, addr):
         _throw_unimpl()
@@ -209,6 +245,13 @@ class GDBDBG(Debugger):
 
         return regs
 
+    def get_virtual_maps(self):
+        #if current_arch.os == OS_LINUX:
+        #   _throw_unimpl()
+        #elif current_arch.os == OS_MAC:
+        #   _throw_unimpl()
+        return []
+
     def get_gpr_val(self, reg):
         return self.get_gp_registers()[reg]
 
@@ -240,9 +283,9 @@ class GDBDBG(Debugger):
         pass
 
     def get_memory(self, addr, size):
-        ptrType = gdb.lookup_type('unsigned long long').pointer()
-        val = gdb.Value(addr).cast(ptrType)
-        return val.dereference()
+        inf = gdb.inferiors()[0]
+        mem = inf.read_memory(addr, size) 
+        return mem.tobytes()
 
 class LLDBDBG(Debugger):
     debugger = None
@@ -336,7 +379,6 @@ class LLDBDBG(Debugger):
 
     def initialize_ui(self):
         self._executeCommand("settings set stop-disassembly-display never")
-        # :( i wish i didn't have to do my own disasm...
         pass
 
     def start(self, cmd, result, m, b, c=None):
@@ -441,17 +483,6 @@ arch_gpr_map = {
                         }
 }
 
-class ArchInfo():
-    def __init__(self, host_arch, host_os, ptr_size, regs, pc, stack_pointer, flags_reg, flags):
-        self.pointer_size = ptr_size
-        self.gp_regs = regs
-        self.stack_pointer = stack_pointer
-        self.gp_flags = flags_reg
-        self.flags = flags
-        self.arch = host_arch
-        self.os = host_os
-        self.pc_reg = pc
-
 def determine_arch():
     archs, size = dbg.get_arch()
     arch_gpregs = []
@@ -473,10 +504,11 @@ def determine_arch():
     uname = dbg.shell("uname")
     uname = "Linux"
     if uname == "Linux":
-        hostos = "linux"
+        hostos = OS_LINUX
     elif uname == "Darwin":
-        hostos = "mac"
+        hostos = OS_MAC
     if hostos is None:
+        hostos = OS_UNK
         print("Unknown arch.. beware")
 
     return ArchInfo(archs, hostos, size, arch_gpregs, pc, stack_pointer, flags_gpreg, flags)
