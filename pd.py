@@ -68,6 +68,9 @@ class MemoryMap():
         self.permissions = permissions
         self.name = name
 
+    def is_readable(self):
+        return 'r' in self.permissions
+
 # Debugger
 #   - get_pid
 #   - set_asm_syntax
@@ -139,7 +142,8 @@ class Debugger:
         
         return full_maps
 
-    def parse_osx_vmmap(self, memstr):
+    def parse_mac_vmmap(self, memstr):
+        # hope we never have to implement this
         return []
     
     def get_permissions_for_addr(self, addr):
@@ -181,8 +185,10 @@ class Debugger:
         disasm = self.get_current_disasm()
         print(disasm)
     
-    def get_map_region_for_ptr(self, ptr):
-        maps = self.get_virtual_maps()
+    def get_map_region_for_ptr(self, ptr, maps=None):
+        if maps is None:
+            maps = self.get_virtual_maps()
+
         if maps is None:
             return None
         
@@ -199,6 +205,7 @@ class Debugger:
         if sp is None:
             return
 
+        memmaps = self.get_virtual_maps()
         for i in range(8):
             mem = int(unpack("<Q", (self.get_memory(sp + 8*i, 8))))
             stack_val = mem
@@ -206,10 +213,11 @@ class Debugger:
             sline = '%04d| ' % (8 * i) + blue(hex(sp + 8 * i)) + ' -> ' + hex(stack_val)
 
             iterval = stack_val
+            
             for i in range(10):
-                mp = self.get_map_region_for_ptr(iterval)
+                mp = self.get_map_region_for_ptr(iterval, maps=memmaps)
 
-                if not mp is None:
+                if not mp is None and mp.is_readable():
                     iterval = int(unpack("<Q", self.get_memory(iterval, 8)))
                     sline += ' -> ' + hex(iterval)
                 else:
@@ -345,11 +353,8 @@ class LLDBDBG(Debugger):
 
         return '\n'.join(disasm)
 
-    def _hard_get_registers(self, debugger):
-        #ret, err = self._executeCommandWithRet(debugger, 'register read')
-        #print(ret.GetOutput())
-        # this is for when the frame just doesn't have registers for some reason...
-        pass
+    def get_pid(self):
+        return self.get_current_process().id
 
     def get_current_process(self):
         return lldb.debugger.GetSelectedTarget().GetProcess()
@@ -369,10 +374,7 @@ class LLDBDBG(Debugger):
 
         rvals = dict()
 
-        if not gprs.IsValid():
-            print('Empty register set.. should hard get?')
-            #regs = self._hard_get_registers(debugger)
-        else:
+        if not gprs is None and gprs.IsValid():
             for reg in gprs:
                 rvals[reg.GetName()] = int(reg.GetValue(), 16)
         return rvals
@@ -384,25 +386,64 @@ class LLDBDBG(Debugger):
     def start(self, cmd, result, m, b, c=None):
         self._executeCommand('process launch --stop-at-entry')
     
+    def get_all_memory_sections(self):
+        # currently missing stack and heap.. great i know
+        # lldb-devs mentions how its not possible, but vmmap does it :(
+        maps = []
+        target = lldb.debugger.GetSelectedTarget()
+        mods_count = target.GetNumModules()
+
+        for i in range(mods_count):
+            mod = target.GetModuleAtIndex(i)
+
+            mod_sections = mod.GetNumSections()
+            for j in range(mod_sections):
+                section = mod.GetSectionAtIndex(j)
+                base = int(section.GetLoadAddress(target))
+                if base == lldb.LLDB_INVALID_ADDRESS:
+                    base = int(section.addr)
+                
+                end = base + int(section.GetByteSize())
+
+                perms = section.GetPermissions()
+                perm_str = ''
+
+                if perms & 0x2:
+                    perm_str = 'r'
+                else:
+                    perm_str = '-'
+                if perms & 0x1:
+                    perm_str += 'w'
+                else:
+                    perm_str += '-'
+                if perms & 0x4:
+                    perm_str += 'x'
+                else:
+                    perm_str += '-'
+
+                name = section.GetName() + " @ " + str(mod.platform_file)
+                
+                maps.append(MemoryMap(base, end, perm_str, name))
+        return maps
+    
     def get_virtual_maps(self):
         proc = self.get_current_process()
         pid = proc.GetProcessID()
 
-        if self.current_arch.os == "linux":
-            pp = open('/proc/' + str(pid) + '/maps', 'rb').read()
-            return self.parse_linux_vmmap(pp)
-        elif self.current_arch.os == "mac":
-            # run vmmap
-            pass
+        if self.current_arch.os == OS_LINUX:
+            maps = open('/proc/' + str(pid) + '/maps', 'rb').read()
+            return self.parse_linux_vmmap(maps)
+        elif self.current_arch.os == OS_MAC:
+            return self.get_all_memory_sections()
 
-        return None
+        return []
 
     def vmmap(self, cmd, result, m, b, c=None):
         # color laer... : p
         vmaps = self.get_virtual_maps()
 
         for mp in vmaps:
-            print('%s-%s %s' % (hex(mp.begin), hex(mp.end), mp.name))
+            print('%s-%s %s (%s)' % (hex(mp.begin), hex(mp.end), mp.name, mp.permissions))
 
     def add_aliases(self):
         self._executeCommand('command script add --function pd.context context')
@@ -501,8 +542,7 @@ def determine_arch():
         return
     
     hostos = None
-    uname = dbg.shell("uname")
-    uname = "Linux"
+    uname = os.uname()[0]
     if uname == "Linux":
         hostos = OS_LINUX
     elif uname == "Darwin":
