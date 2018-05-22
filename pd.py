@@ -49,6 +49,7 @@ def bold(x):
     return _START_ATTR + '1m' + x + _RESET_ATTRS
 
 (OS_MAC, OS_LINUX, OS_UNK) = range(3)
+(ARCH_X86, ARCH_X64, ARCH_UNK) = range(3)
 
 class ArchInfo():
     def __init__(self, host_arch, host_os, ptr_size, regs, pc, stack_pointer, flags_reg, flags):
@@ -264,7 +265,7 @@ class GDBDBG(Debugger):
         return self.get_gp_registers()[reg]
 
     def get_arch(self):
-        return "x86_64", 8
+        return ARCH_X64, 8
 
     def set_syntax(self, syntax):
         self._executeCommand("set disassembly-flavor " + syntax)
@@ -305,7 +306,19 @@ class LLDBDBG(Debugger):
         self._executeCommand('target stop-hook add -o context')
     
     def get_arch(self):
-        return "x86_64", 8
+        triple = lldb.debugger.GetSelectedTarget().GetTriple()
+        triple = triple.split('-')
+        arch = ARCH_UNK
+        ptr_size = 4
+
+        if 'x86_64' in triple:
+            arch = ARCH_X64
+            ptr_size = 8
+        if 'x86' in triple:
+            arch = ARCH_X86
+            ptr_size = 4
+        
+        return arch, ptr_size
 
     def get_memory(self, addr, size):
         err = lldb.SBError()
@@ -510,13 +523,13 @@ def stop_hook(*args):
 # also handling flags..
 
 arch_gpr_map = {
-        'x86':      {   'gpr': ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'eip', 'eflags'], 
+        ARCH_X86:       {   'gpr': ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'eip', 'eflags'], 
                         'pc': 'eip',
                         'sp': 'esp',
                         'flags_reg': 'eflags',
                         'flags': { 1: 'CF', 2: 'PF', 4: 'AF', 6: 'ZF', 7: 'SF', 8: 'TF', 9: 'IF', 10: 'DF', 11: 'OF' }
                         },
-        'x86_64':   {   'gpr': ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'rip', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15'], 
+        ARCH_X64:   {   'gpr': ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'rip', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15'], 
                         'pc': 'rip',
                         'sp': 'rsp',
                         'flags_reg': 'rflags',
