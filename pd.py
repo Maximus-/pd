@@ -144,6 +144,7 @@ class Debugger:
         return full_maps
 
     def parse_mac_vmmap(self, memstr):
+        print(memstr)
         # hope we never have to implement this
         return []
     
@@ -402,6 +403,22 @@ class LLDBDBG(Debugger):
     def get_all_memory_sections(self):
         # currently missing stack and heap.. great i know
         # lldb-devs mentions how its not possible, but vmmap does it :(
+
+        process = self.get_current_process()
+    
+        region_list = process.GetMemoryRegions()
+
+        #for i in range(region_list.GetSize()):
+        #    region = lldb.SBMemoryRegionInfo()
+
+        #    region_list.GetMemoryRegionAtIndex(i, region)
+
+        #    begin_address = region.GetRegionBase()
+        #    end_address = region.GetRegionEnd() - 1
+        #    #name = region.GetName()
+        #    print("%016x-%016x - %s" % (begin_address, end_address, "aaa"))
+
+        return
         maps = []
         target = lldb.debugger.GetSelectedTarget()
         mods_count = target.GetNumModules()
@@ -544,6 +561,8 @@ def determine_arch():
     stack_pointer = None
     flags = None
 
+    archs = ARCH_X64
+
     if archs in arch_gpr_map:
         arch_gpregs = arch_gpr_map[archs]['gpr']
         flags_gpreg = arch_gpr_map[archs]['flags_reg']
@@ -563,6 +582,8 @@ def determine_arch():
     if hostos is None:
         hostos = OS_UNK
         print("Unknown arch.. beware")
+
+    hostos = OS_MAC
 
     return ArchInfo(archs, hostos, size, arch_gpregs, pc, stack_pointer, flags_gpreg, flags)
 
