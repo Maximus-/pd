@@ -16,6 +16,25 @@ def unpack(fmt, data):
         return outp[0]
     return outp
 
+def is_all_ascii(data):
+    for i in range(8):
+        ind_byte = (data >> (8 * i)) & 0xff
+        if ind_byte < 0x20 or ind_byte > 0x7e:
+            return False
+    return True
+
+def magic_str_to_int(strnum):
+    if len(strnum) > 2:
+        if strnum[0:2] == '0x':
+            return int(strnum, 16)
+        elif strnum[0:2] == '0b':
+            return int(strnum, 2)
+        # Only accept _explicit_ octal style
+        elif strnum[0:2] == '0o':
+            return int(strnum, 8)
+    # Either it's just a two digit number, or it's decimal
+    return int(strnum, 10)
+
 # --- try import dbg lib ---
 try:
     import gdb
@@ -33,6 +52,7 @@ except ImportError:
 def _throw_unimpl():
     raise Exception('Method unimplemented: ' + repr(inspect.stack()))
 
+# --- color helpers ---
 _START_ATTR = '\x1b['
 _RESET_ATTRS = '\x1b[0m'
 
@@ -47,6 +67,7 @@ def blue(x):
 
 def bold(x):
     return _START_ATTR + '1m' + x + _RESET_ATTRS
+# --- end color helpers ---
 
 (OS_MAC, OS_LINUX, OS_UNK) = range(3)
 (ARCH_X86, ARCH_X64, ARCH_UNK) = range(3)
@@ -63,14 +84,41 @@ class ArchInfo():
         self.pc_reg = pc
 
 class MemoryMap():
-    def __init__(self, begin, end, permissions, name):
+    def __init__(self, begin, end, is_readable, is_writeable, is_executable, name):
         self.begin = begin
         self.end = end
-        self.permissions = permissions
+        self.is_readable = is_readable
+        self.is_writeable = is_writeable
+        self.is_executable = is_executable
+        self.permissions_string = ''
+        if self.is_readable:
+            self.permissions_string += 'r'
+        else:
+            self.permissions_string += '-'
+
+        if self.is_writeable:
+            self.permissions_string += 'w'
+        else:
+            self.permissions_string += '-'
+
+        if self.is_executable:
+            self.permissions_string += 'x'
+        else:
+            self.permissions_string += '-'
+
         self.name = name
 
-    def is_readable(self):
-        return 'r' in self.permissions
+    def pretty_print(self):
+        _name = self.name
+        if _name == '':
+            _name = '(anon)'
+        region_description = '%016x-%016x %s (%s)' % (self.begin, self.end, _name, self.permissions_string)
+        if self.is_executable:
+            print(red(region_description))
+        elif self.is_writeable:
+            print(blue(region_description))
+        else:
+            print(region_description)
 
 # Debugger
 #   - get_pid
@@ -139,15 +187,11 @@ class Debugger:
             terms = lm.split(' ')
             beg = int(terms[0].split('-')[0], 16)
             end = int(terms[0].split('-')[1], 16)
-            full_maps.append(MemoryMap(beg,end, terms[1], terms[-1]))
+            # this is gross 
+            full_maps.append(MemoryMap(beg, end, terms[1][0] == 'r', terms[1][1] == 'w', terms[1][2] == 'x', terms[-1]))
         
         return full_maps
 
-    def parse_mac_vmmap(self, memstr):
-        print(memstr)
-        # hope we never have to implement this
-        return []
-    
     def get_permissions_for_addr(self, addr):
         _throw_unimpl()
 
@@ -178,6 +222,28 @@ class Debugger:
             flags_line += ')'
             print(flags_line)
 
+    def telescope(self, addr, num):
+        memmaps = self.get_virtual_maps()
+        for i in range(num):
+            mem_val = int(unpack("<Q", (self.get_memory(addr + 8*i, 8))))
+
+            # sline is a text run
+            sline = '%04d| ' % (8 * i) + blue(hex(addr + 8 * i)) + ' -> ' + hex(mem_val)
+
+            iterval = mem_val
+            
+            for i in range(10):
+                mp = self.get_map_region_for_ptr(iterval, maps=memmaps)
+
+                if not mp is None and mp.is_readable:
+                    iterval = int(unpack("<Q", self.get_memory(iterval, 8)))
+                    sline += ' -> ' + hex(iterval)
+                    # Determine if iterval is ascii.. if so, fetch the rest
+                else:
+                    break
+
+            print(sline)
+
     def shell(self, cmd):
         _throw_unimpl()
     
@@ -185,7 +251,8 @@ class Debugger:
         print(red('[---------code---------]'))
 
         disasm = self.get_current_disasm()
-        print(disasm)
+        if not disasm is None:
+            print(disasm)
     
     def get_map_region_for_ptr(self, ptr, maps=None):
         if maps is None:
@@ -207,25 +274,7 @@ class Debugger:
         if sp is None:
             return
 
-        memmaps = self.get_virtual_maps()
-        for i in range(8):
-            mem = int(unpack("<Q", (self.get_memory(sp + 8*i, 8))))
-            stack_val = mem
-
-            sline = '%04d| ' % (8 * i) + blue(hex(sp + 8 * i)) + ' -> ' + hex(stack_val)
-
-            iterval = stack_val
-            
-            for i in range(10):
-                mp = self.get_map_region_for_ptr(iterval, maps=memmaps)
-
-                if not mp is None and mp.is_readable():
-                    iterval = int(unpack("<Q", self.get_memory(iterval, 8)))
-                    sline += ' -> ' + hex(iterval)
-                else:
-                    break
-
-            print(sline)
+        self.telescope(sp, 8) # Default telescope depth
 
 class GDBDBG(Debugger):
     def register_hooks(self):
@@ -408,53 +457,58 @@ class LLDBDBG(Debugger):
     
         region_list = process.GetMemoryRegions()
 
-        #for i in range(region_list.GetSize()):
-        #    region = lldb.SBMemoryRegionInfo()
-
-        #    region_list.GetMemoryRegionAtIndex(i, region)
-
-        #    begin_address = region.GetRegionBase()
-        #    end_address = region.GetRegionEnd() - 1
-        #    #name = region.GetName()
-        #    print("%016x-%016x - %s" % (begin_address, end_address, "aaa"))
-
-        return
         maps = []
-        target = lldb.debugger.GetSelectedTarget()
-        mods_count = target.GetNumModules()
+        for i in range(region_list.GetSize()):
+            region = lldb.SBMemoryRegionInfo()
 
-        for i in range(mods_count):
-            mod = target.GetModuleAtIndex(i)
+            region_list.GetMemoryRegionAtIndex(i, region)
 
-            mod_sections = mod.GetNumSections()
-            for j in range(mod_sections):
-                section = mod.GetSectionAtIndex(j)
-                base = int(section.GetLoadAddress(target))
-                if base == lldb.LLDB_INVALID_ADDRESS:
-                    base = int(section.addr)
-                
-                end = base + int(section.GetByteSize())
+            begin_address = region.GetRegionBase()
+            end_address = region.GetRegionEnd() - 1
+            name = region.GetName() 
+            if name is None:
+                name = ''
+            perm_str = ''
 
-                perms = section.GetPermissions()
-                perm_str = ''
+            maps.append(MemoryMap(begin_address, end_address, region.IsReadable(), region.IsWritable(), region.IsExecutable(), name))
 
-                if perms & 0x2:
-                    perm_str = 'r'
-                else:
-                    perm_str = '-'
-                if perms & 0x1:
-                    perm_str += 'w'
-                else:
-                    perm_str += '-'
-                if perms & 0x4:
-                    perm_str += 'x'
-                else:
-                    perm_str += '-'
-
-                name = section.GetName() + " @ " + str(mod.platform_file)
-                
-                maps.append(MemoryMap(base, end, perm_str, name))
         return maps
+
+        #target = lldb.debugger.GetSelectedTarget()
+        #mods_count = target.GetNumModules()
+
+        #for i in range(mods_count):
+        #    mod = target.GetModuleAtIndex(i)
+
+        #    mod_sections = mod.GetNumSections()
+        #    for j in range(mod_sections):
+        #        section = mod.GetSectionAtIndex(j)
+        #        base = int(section.GetLoadAddress(target))
+        #        if base == lldb.LLDB_INVALID_ADDRESS:
+        #            base = int(section.addr)
+        #        
+        #        end = base + int(section.GetByteSize())
+
+        #        perms = section.GetPermissions()
+        #        perm_str = ''
+
+        #        if perms & 0x2:
+        #            perm_str = 'r'
+        #        else:
+        #            perm_str = '-'
+        #        if perms & 0x1:
+        #            perm_str += 'w'
+        #        else:
+        #            perm_str += '-'
+        #        if perms & 0x4:
+        #            perm_str += 'x'
+        #        else:
+        #            perm_str += '-'
+
+        #        name = section.GetName() + " @ " + str(mod.platform_file)
+        #        
+        #        maps.append(MemoryMap(base, end, perm_str, name))
+        #return maps
     
     def get_virtual_maps(self):
         proc = self.get_current_process()
@@ -468,12 +522,49 @@ class LLDBDBG(Debugger):
 
         return []
 
-    def vmmap(self, cmd, result, m, b, c=None):
-        # color laer... : p
+    def do_vmmap(self, cmd, args, m, b, c=None):
         vmaps = self.get_virtual_maps()
+        if vmaps is None:
+            print("Couldn't get virtual memory maps... :(")
+            return
+
+        if len(args) == 0:
+            # No arguments, print all regions
+            # print all regions
+            for mp in vmaps:
+                mp.pretty_print()
+            return
+
+        address = None
+        # For the world where someone has something mapped below 99...
+        # I think __PAGEZERO and MMAP_MIN_ADDR prevent this
+        # But only for non-root? 
+        address = magic_str_to_int(args)
 
         for mp in vmaps:
-            print('%s-%s %s (%s)' % (hex(mp.begin), hex(mp.end), mp.name, mp.permissions))
+            if address >= mp.begin and address < mp.end:
+                mp.pretty_print()
+                break
+
+    def do_telescope(self, cmd, args, m, b, c=None):
+        # How does this work without args again?
+        # I think it's just the current stack walk?
+
+        numc = 8 
+        address = None
+
+        if len(args) > 0:
+            # Attempt to split it first
+            arglist = args.split(' ')
+            if len(arglist) > 1:
+                address = magic_str_to_int(arglist[0])
+                numc = magic_str_to_int(arglist[1])
+            else:
+                address = magic_str_to_int(args)
+        else:
+            address = self.get_gpr_val(dbg.current_arch.stack_pointer)
+
+        self.telescope(address, numc)
 
     def add_aliases(self):
         self._executeCommand('command script add --function pd.context context')
@@ -482,9 +573,11 @@ class LLDBDBG(Debugger):
 
         self._executeCommand('command script add --function pd.dbg.start start')
 
-        self._executeCommand('command script add --function pd.dbg.vmmap vmmap')
-        self._executeCommand('command script add --function pd.dbg.vmmap vmm')
-        # tele, searchmem, tls, deactive, checksec, aslr, print disassembly, stepuntil
+        self._executeCommand('command script add --function pd.dbg.do_vmmap vmmap')
+        self._executeCommand('command script add --function pd.dbg.do_vmmap vmm')
+        self._executeCommand('command script add --function pd.dbg.do_telescope telescope')
+        self._executeCommand('command script add --function pd.dbg.do_telescope tele')
+        # searchmem, tls, deactive, checksec, aslr, print disassembly, stepuntil
         # xrefs, heap stuff
         # libc, heap, ld (print base)
         # heapinfo, magic, one_gadget, canary
